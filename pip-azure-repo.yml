@@ -1,0 +1,129 @@
+---
+#
+#  The mapping of the DC terms with Azure is as given below
+#   The Project Name (Variable is  group) in DC maps to the Azure Organization
+#   The Pipeline Name (Variable is name) in DC maps to the Azure Project
+#  Multiple Pipeline under a project (in DC) maps to Multiple Projects under a Org (in Azure)
+#
+
+- name: Adding Devops binary
+  shell: az extension add --name azure-devops
+
+- name: Authentication with PAT token.
+  shell: echo {{ resource.develop.azure_repo.tool_connection.token }} | az devops login --organization https://dev.azure.com/{{ resource.develop.azure_repo.tool_connection.group }}
+
+- name: Azure Devops project creation.
+  shell: az devops project create --name={{ resource.develop.azure_repo.tool_setup.name }} --description="{{ resource.develop.azure_repo.tool_setup.description | default('Created by DevOps Commander')  }}" --detect=true --org=https://dev.azure.com/{{ resource.develop.azure_repo.tool_connection.group }}  --process={{ resource.develop.azure_repo.tool_setup.process | default('Agile') }} --source-control=git --visibility=public
+
+
+- name: Setting the organization to default.
+  shell: az devops configure --defaults organization=https://dev.azure.com/{{ resource.develop.azure_repo.tool_connection.group }} project={{ resource.develop.azure_repo.tool_setup.name }}
+- name: Setting the project to deafult.
+  shell: az devops configure --defaults project={{ resource.develop.azure_repo.tool_setup.name }}
+
+- name: Executing a command  
+  shell: sleep 10
+
+##########################################################################################################
+#
+#  Create the Following variables which will be used by the subsequent script in the pipeline creation
+#  Variable needed for Starter Code script, the variables needed are
+#  1. TARGET_REPO_URL - The GIT Repo URL created by this script along with Token
+#  2. USER_NAME - The username with which git pushes the code. Defaults to dc-user
+#  3. USER_EMAIL - The user email with which the git pushes the code. Defaults to dc@ibm.com
+#  4. BRANCH_ARRAY - The list of branches to be created. This comes from user input
+#  5. TEMPLATE_REPO_NAME - The Name of the template code REPO as given by user input
+#  6. TEMPLATE_REPO_URL - The Template GIT URL with token
+#
+#  Variable needed for Build Job script - This may be Jenkins, AWS Code build, Azure Pipeline etc
+#  1. TOKEN - The Token for the created GIT URL needed to configure the build JOB
+#  2. TARGET_CLONE_URL - The git clone URL without token which needs to be configured
+#
+##########################################################################################################
+
+- name: Set variable for appsody
+  set_fact:
+            appsody_url: "{{ resource.develop.azure_repo.tool_setup.template.name }}"
+  register: output
+  when: resource.develop.azure_repo.tool_setup.template.type == "appsody"
+
+- debug:
+          msg: "appsody var is {{ appsody_url }}"
+  when: resource.develop.azure_repo.tool_setup.template.type == "appsody"
+          
+- name: var for appsody
+  set_fact:
+            APPSODY: 1
+  when: resource.develop.azure_repo.tool_setup.template.type == "appsody"
+
+- name: var for git
+  set_fact:
+            GIT: 1
+  when: resource.develop.azure_repo.tool_setup.template.type == "git"
+  
+- name: Set TOKEN variable to be used by build tool
+  set_fact:
+    TOKEN: "{{ resource.develop.azure_repo.tool_connection.group }}:{{ resource.develop.azure_repo.tool_connection.token }}"
+      
+- name: Set TARGET_CLONE_URL variable to be used by build tool
+  set_fact:
+    TARGET_CLONE_URL: "https://dev.azure.com/{{ resource.develop.azure_repo.tool_connection.group }}/{{ resource.develop.azure_repo.tool_setup.name }}/_git/{{ resource.develop.azure_repo.tool_setup.name }}" 
+      
+- name: Set Clone url for the Template Code
+  shell: echo "{{ resource.develop.azure_repo.tool_setup.template.protocol }}://{{ resource.develop.azure_repo.tool_setup.template.token }}@{{ resource.develop.azure_repo.tool_setup.template.url }}/{{ resource.develop.azure_repo.tool_setup.template.repo }}.git"
+  register: tmp_TEMPLATE_REPO_URL
+
+- name: Set variable TEMPLATE_REPO_URL
+  set_fact:
+    TEMPLATE_REPO_URL: "{{ tmp_TEMPLATE_REPO_URL.stdout }}"
+
+- name: Set CLONE URL for pushing the template code
+  shell: echo "https://{{ resource.develop.azure_repo.tool_connection.group }}:{{ resource.develop.azure_repo.tool_connection.token }}@dev.azure.com/{{ resource.develop.azure_repo.tool_connection.group }}/{{ resource.develop.azure_repo.tool_setup.name }}/_git/{{ resource.develop.azure_repo.tool_setup.name }}"
+  register: tmp_TARGET_REPO_URL
+
+
+- name: Set variable TARGET_REPO_URL
+  set_fact:
+    TARGET_REPO_URL: "{{ tmp_TARGET_REPO_URL.stdout }}"
+
+- name: Set Git username 
+  set_fact:
+    USER_NAME: "{{ resource.develop.azure_repo.tool_setup.template.name | default('dcuser')  }}"
+ 
+- name: Set Git Email
+  set_fact: 
+    USER_EMAIL: "{{ resource.develop.azure_repo.tool_setup.template.email | default('dcuser@dc.com') }}"
+  
+- name: Set the list of branches to be created
+  set_fact:
+    BRANCH_ARRAY: "{{ resource.develop.azure_repo.tool_setup.branch }}"
+
+- name: Create repo variable
+  set_fact:
+    TEMPLATE_REPO_NAME: "{{ resource.develop.azure_repo.tool_setup.template.repo }}"
+
+
+- name: To set branch of Template repo code
+  set_fact:
+      TEMPLATE_REPO_BRANCH: "{{ resource.develop.gitlab.tool_setup.template.branch | default('master') }}"
+
+
+- name: Send  response to Devops Commander
+  block:
+  - name: "Azure Repo: Send  success response to Devops Commander"
+    uri:
+       url: "{{ resource.url }}/pipelineattribute/pipelineurl?tenantId={{ resource.tenantId }}"
+       method: PUT
+       body_format: json
+       headers:
+           Authorization: "{{ resource.token }}"
+       body:
+           pipelineAttributeId: "{{ resource.develop.azure_repo.pipelineAttributeId }}"
+           url: "{{ resource.develop.azure_repo.tool_connection.url }}/artifactory"
+           provision_status: "48"
+           provision_message: " Azure Repo: Repo created successfully"
+  ignore_errors: true
+
+#Invoke Starter code
+- name: Call Starter code
+  include: starter_code.yml
